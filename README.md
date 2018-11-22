@@ -1,8 +1,25 @@
 
-#The Backdoor Factory Proxy (BDFProxy) v0.3.5
+# BDFProxy IS NO LONGER MAINTAINED OR SUPPORTED
+
+BLOG: http://secureallthethings.blogspot.com/2017/08/closing-door-end-of-backdoor-factory.html 
+
+# The Backdoor Factory Proxy (BDFProxy) v0.3.8
+
 For security professionals and researchers only.
 
-###NOW ONLY WORKS WITH MITMPROXY >= v.0.11 
+[![Join the chat at https://gitter.im/secretsquirrel/BDFProxy](https://badges.gitter.im/secretsquirrel/BDFProxy.svg)](https://gitter.im/secretsquirrel/BDFProxy?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)  [![Black Hat Arsenal](https://www.toolswatch.org/badges/arsenal/2015.svg)](https://www.blackhat.com/us-15/arsenal.html)
+
+
+###NOW ONLY WORKS WITH v.0.17 >= MITMPROXY >= v.0.11 
+
+Docker:
+```
+ # sudo echo 1 > /proc/sys/net/ipv4/ip_forward  # linux
+ # sudo sysctl -w net.inet.ip.forwarding=1 # macOS
+ docker pull secretsquirrel/bdfproxy
+ docker run -it -p 8080:8080 secretsquirrel/bdfproxy bash
+ # ./bdf_proxy.py
+```
 
 To install on Kali:
 
@@ -64,8 +81,6 @@ Yes, some of those apps are protected by self checking mechanisms.  I've been wo
 	mitmProxy - Kali Build .10
 	BDF - most current
 	Capstone (part of BDF)
-	libmagic
-	python-magic
 
 ---
 ##Supported Environment:
@@ -142,7 +157,48 @@ We have it.  The proxy window will quickly fill with massive amounts of cat link
 	-Logical plant at your favorite ISP
 
 
+##Bug Reporting
+
+Bugs happen, but if I can't understand your issue, I can't help you.
+
+Submit issues here: https://github.com/secretsquirrel/BDFProxy/issues
+
+Include the following information from the output of the these commands (use pastebin for the longer commands):
+
+```
+# bdfproxy only supports v11 -> v17
+$ mitmproxy --version
+
+$ uname -a
+
+# Use pastebin perhaps
+$ cat bdfproxy.cfg 
+$ ./bdf_proxy.py
+
+```
+
+
 ###Change Log:
+
+####07/04/2016
+
+Support for BDF Preprocessor and mitmProxy v17
+
+####12/20/2015
+
+Added configuration options in bdfproxy.cfg to support PE code signing from BDF => CODE_SIGN
+See BDF README for details
+
+
+####11/13/2015
+
+Remove python-magic dependencies because there are two libraries that are named as such.  Which is confusing.
+
+
+####10/19/2015
+
+Add support for BDF Import Directory Patching into the a code cave vs a new section.  Update IDA_IN_CAVE to True in the bdfproxy.cfg file for this.  EXPERIMENTAL...
+
 
 ####8/12/2015
 
